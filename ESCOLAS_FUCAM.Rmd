@@ -1,0 +1,256 @@
+---
+title: "SOLICITAÇÃO DE DADOS_ESCOLAS FUCAM"
+author: "Douglas Gonçalves Bernardo"
+date: "30/08/2022"
+output: html_document
+---
+
+```{r library}
+if(!require(data.table)){install.packages("data.table");require(data.table)}
+if(!require(plyr)){install.packages("plyr");require(plyr)}
+if(!require(openxlsx)){install.packages("openxlsx");require(openxlsx)}
+if(!require(rstudioapi)){install.packages("rstudioapi"); require(rstudioapi)}
+if(!require(tidyverse)){install.packages("tidyverse");require(tidyverse)}
+if(!require(readxl)){install.packages("readxl");require(readxl)}
+if(!require(dplyr)){install.packages("dplyr");require(dplyr)}
+if(!require(tidyr)){install.packages("tidyr");require(tidyr)}
+if(!require(readr)){install.packages("readr");require(readr)}
+if(!require(DBI)){install.packages("DBI");require(DBI)}
+if(!require(RPostgreSQL)){install.packages("RPostgreSQL");require(RPostgreSQL)}
+
+paste("Bibliotecas importadas em", format(Sys.time(), "%d/%m/%Y %H:%M:%S"))
+```
+
+
+
+```{r Diretório}
+
+diretorio <- dirname(dirname(getSourceEditorContext()$path))
+
+paste("Diretório principal:", diretorio)
+
+```
+
+```{r Entradas}
+
+setwd(file.path(dirname(diretorio), "entradas"))
+
+enturmacoes_total <- fread(list.files(pattern = "tb_enturmacao"),
+                    sep = "|",
+                    encoding = "UTF-8",
+                    na.strings = "") %>% 
+  setnames("#id_enturmacao", "id_enturmacao") 
+
+
+setwd(file.path(dirname(diretorio), "entradas"))
+
+matriculas_total <- fread(list.files(pattern = "tb_matricula"),
+                    # sep = ",",
+                    encoding = "UTF-8",
+                    na.strings = "") %>% 
+  setnames("#id_matricula", "id_matricula")
+
+
+setwd(file.path(dirname(diretorio), "entradas"))
+
+alunos_total <- fread(list.files(pattern = "tb_cadastro"),
+                    sep = "|",
+                    encoding = "UTF-8",
+                    na.strings = "") %>% 
+  setnames("#id_aluno", "id_aluno") 
+
+
+setwd(file.path(dirname(diretorio), "entradas"))
+
+escolas_total <- fread(list.files(pattern = "tb_endereco"),
+                    sep = "|",
+                    encoding = "UTF-8",
+                    na.strings = "") %>% 
+  setnames("#id_instituicao_endereco", "id_instituicao_endereco") 
+
+
+setwd(file.path(dirname(diretorio), "entradas"))
+
+turmas_total <- fread(list.files(pattern = "tb_turma"),
+                    sep = "|",
+                    encoding = "UTF-8",
+                    na.strings = "") %>% 
+  setnames("#id_turma", "id_turma") 
+
+
+setwd(file.path(diretorio, "entradas"))
+
+tb_idade <- read_excel(path = "001_tabela_procv_distorcao.xls")
+
+
+```
+
+```{r Selects & Filters}
+
+turmas <- turmas_total %>%
+    filter(ano_administrativo == 2022,
+      fl_ativa == "Sim",
+      is.na(dc_projeto),
+      fl_reforco_escolar == "Não"|
+        is.na(fl_reforco_escolar),
+        dc_especificidade != "REFORÇO ESCOLAR"
+        ) %>% 
+     mutate(
+       fl_correcao_fluxo = case_when(
+            fl_correcao_fluxo == "Sim" ~ "Sim",
+            str_detect(nome_turma, "Correção_Fluxo") ~ "Sim",
+            TRUE ~ "Não"),
+        dc_etapa_turma = dc_etapa,
+        dc_etapa = NULL,
+        id_nivel = `id_nível`,
+        `id_nível` = NULL) %>% 
+    replace_na(list(fl_multiseriada = "Não",
+                    fl_correcao_fluxo = "Não")) %>%
+   select(id_turma, nome_turma, id_etapa, dc_etapa_turma,
+          id_nivel, dc_nivel, id_tipo_ensino, dc_tipo_ensino,
+           dc_turno, periodo_letivo, fl_multiseriada,
+           fl_correcao_fluxo, id_instituicao_endereco) %>%
+    unique()
+  
+  
+enturmacoes <- enturmacoes_total %>%
+  select(id_matricula, id_turma) %>%
+  inner_join(turmas, by = 'id_turma')
+  # filter(fl_correcao_fluxo == 'Não')
+
+matriculas <- matriculas_total %>%
+   filter(id_situacao_matricula == "A",
+         fl_exclusivo_aee_projeto == "Não",
+         fl_prog_parcial == "Não") %>%
+  select(id_matricula,
+         id_aluno,
+         dc_etapa,
+         id_escola,
+         nome_escola,
+         id_endereco,
+         dc_etapa,
+         id_turno) %>% 
+  inner_join(enturmacoes, by = 'id_matricula') %>%
+  select(id_matricula,
+         id_aluno,
+         #nome_aluno,
+         id_escola,
+         nome_escola,
+         id_endereco,
+         id_turma,
+         nome_turma,
+         id_tipo_ensino,
+         dc_tipo_ensino,
+         id_nivel,
+         dc_nivel,
+         id_etapa,
+         dc_etapa,
+         dc_etapa_turma,
+         dc_turno,
+         id_turno
+         ) %>% 
+  filter(dc_tipo_ensino %in% c("ENSINO REGULAR",
+                               "INTEGRAL",
+                               "INTEGRAL PROFISSIONAL")) %>% 
+  #filter(!(dc_nivel == 'ENSINO MÉDIO' & dc_etapa == '3º')) %>% 
+  mutate(dc_etapa_matricula = dc_etapa)
+                              
+
+alunos <- alunos_total %>%
+    mutate(dt_nascimento = as.Date(dt_nascimento, format = "%m/%d/%Y")) %>%
+  select(id_aluno,
+         dt_nascimento) %>% 
+  unique()
+
+
+escolas <- escolas_total %>%
+  filter(tp_situacao_end == "Ativo",
+             tp_situacao_escola == "Em Atividade",
+             dc_dependencia == "Estadual",
+             fl_end_principal == "Sim") %>%
+  select(id_escola,
+           #id_endereco,
+           dc_sre,
+           dc_municipio) %>% 
+  unique()
+
+```
+
+
+
+```{r idade}
+
+dados_alunos <- matriculas %>%  
+  left_join(alunos, "id_aluno") %>%
+  inner_join(escolas, "id_escola")
+
+idade_2023 <- dados_alunos %>%
+  mutate(idade_22 = floor((lubridate::dmy("30/12/2022")- dt_nascimento)/365)
+         #idade_23 = idade_22+1
+         ) %>%
+  left_join(tb_idade,
+            by = c("dc_nivel" = "DC_NIVEL", "dc_etapa_matricula" = "DC_ETAPA")) %>%
+  mutate(fl_distorcao = if_else(idade_22 >= (IDADE_IDEAL + 2), 1, 0)
+         #fl_15a17 = ifelse(idade_23 >=15 & idade_23 <= 17, 1,0),
+         #fl_18oumais = ifelse(idade_23 >=18, 1, 0)
+         ) %>% 
+  #filter(fl_distorcao == 1) %>% 
+   filter(id_escola %in% c("23655",
+                               "23876",
+                               "62391",
+                               "63002",
+                               "63100",
+                               "9024",
+                               "79715",
+                               "82783"))
+  
+
+base <- idade_2023 %>% 
+    select(dc_sre, 
+           id_escola,
+           id_matricula,
+           fl_distorcao,
+           nome_escola, 
+           id_endereco, 
+           id_tipo_ensino,
+           dc_tipo_ensino,
+           id_nivel,
+           dc_nivel, 
+           id_etapa,
+           dc_etapa_turma,
+           dc_turno,
+           id_turno) %>% 
+  unique() %>% 
+  dplyr::group_by(dc_sre, 
+           id_escola,
+           nome_escola, 
+           id_endereco, 
+           id_tipo_ensino,
+           dc_tipo_ensino,
+           id_nivel,
+           dc_nivel, 
+           id_etapa,
+           dc_etapa_turma,
+           dc_turno,
+           id_turno) %>% 
+  dplyr::summarise(num_matriculas = n_distinct(id_matricula),
+            num_distorcao = sum(fl_distorcao)) %>% 
+  mutate(taxa_distorcao = num_distorcao/num_matriculas)
+
+
+```
+
+
+```{r relatorio}
+
+setwd(file.path(diretorio, "saidas"))
+
+hoje <- format(Sys.time(), "%Y_%m_%d")
+
+# write.xlsx(idade_2023, file = paste0(hoje,"_lista_nominal_distorcao_idade_serie_2023.xlsx"))
+write.xlsx(base, file = paste0(hoje,"_distorcao_idade_serie_2022.xlsx"), overwrite = T)
+# write_csv(base, file = paste0(hoje,"_distorcao_idade_serie_2021"))
+
+```
+
+  
